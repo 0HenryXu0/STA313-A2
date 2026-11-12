@@ -1,0 +1,49 @@
+---
+title: "Title"
+output: 
+  pagedown::html_paged:
+    toc: false
+    number_sections: false
+    css:
+      - styles.css
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+
+schools = read_csv("ont-school-demo-info.csv")
+```
+
+```{r}
+special_schools <- schools |>
+  filter(school_special_condition_code %in% c("Deaf", "Blind", "Deaf/Blind"))
+
+special_schools |>
+  filter(year == "2024-2025") |>
+  select(
+    school_number, school_name, condition = school_special_condition_code,
+    city, school_level, grade_range, school_language, enrolment
+  ) |>
+  arrange(condition, city, school_level) |>
+  print(n = Inf, width = Inf)
+```
+
+```{r count-schools-by-special-education-percentage}
+school_counts <- schools |>
+  filter(year == "2024-2025") |>
+  mutate(
+    percentage_group = cut(
+      percentage_of_students_receiving_special_education_services,
+      breaks = seq(0, 100, by = 10),
+      labels = c(
+        "0–10%",
+        paste0(">", seq(10, 90, by = 10), "–", seq(20, 100, by = 10), "%")
+      ),
+      include.lowest = TRUE
+    )
+  ) |>
+  filter(!is.na(percentage_group)) |>
+  count(percentage_group, name = "number_of_schools", .drop = FALSE)
+
+school_counts
+```
