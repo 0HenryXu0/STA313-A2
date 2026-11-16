@@ -25,55 +25,84 @@ library(sf)
 # install.packages("pagedown")
 
 data_file = "ont-school-demo-info.csv"
-knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(
+  echo = FALSE,
+  fig.width = 9,
+  fig.height = 4.5,
+  out.width = "100%",
+  dpi = 200,
+  fig.align = "center",
+  message = FALSE,
+  warning = FALSE
+)
 ```
 
 
 ## Planning special education support across Ontario
 
-Where in Ontario do schools serve students with disabilities and other special education needs? How does academic achievement vary across schools with different shares of students receiving support? For school-board staff planning future services, these questions can help identify where to review access to specialist staff, accessible learning materials, and designated programs.
+Where in Ontario do schools serve students with disabilities and other special education needs? How does academic achievement vary across schools with different shares of students receiving support? For school-board staff planning future services, these questions can help identify where to review access to specialist staff, accessible learning materials, and designated programs. 
 
 Ontario’s 2024–25 school records provide a starting point. They describe the share of students receiving special education services, identify some sites through special-condition codes, and report achievement at the school level. Decisions about additional support would also draw on students’ individual needs and the services already available to them.
+
+::: {.keep-with-map}
 
 ## Reporting schools' distribution in Ontario, with designated sites in four communities
 
 Where do district schools report special education service data, and where does the dataset identify designated sites or schools reporting that every student receives services? Figure 1 brings those locations together.
 
-```{r map-data, include=FALSE}
-
+```{r prepare-data, include=FALSE}
 data_file <- "ont-school-demo-info.csv"
+level_names <- c("Elementary", "Secondary")
 
-recent <- read_csv(
+schools <- read_csv(
   data_file,
   na = c("", "NA", "SP"),
   col_types = cols_only(
     year = col_character(),
-    city = col_character(),
+    board_number = col_character(),
+    board_name = col_character(),
     board_type = col_character(),
-    school_level = col_character(),
+    school_number = col_character(),
     school_special_condition_code = col_character(),
+    school_level = col_character(),
+    enrolment = col_double(),
+    city = col_character(),
     longitude = col_double(),
     latitude = col_double(),
     percentage_of_students_receiving_special_education_services = col_double()
   )
 ) |>
+  mutate(service_pct = percentage_of_students_receiving_special_education_services)
+
+recent <- schools |>
   filter(year == "2024-2025") |>
-  transmute(
-    city, board_type, longitude, latitude,
-    level = factor(school_level, levels = c("Elementary", "Secondary")),
+  mutate(
+    level = factor(school_level, levels = level_names),
     condition = school_special_condition_code,
-    service_pct = percentage_of_students_receiving_special_education_services,
     located = between(latitude, 41, 57) & between(longitude, -97, -73)
   )
 
-district_points <- recent |>
+district_schools <- recent |>
   filter(
-    located,
     board_type %in% c("Pub Dist Sch Brd (E/F)", "Cath Dist Sch Brd (E/F)"),
     condition == "Not applicable",
     !is.na(level)
-  ) |>
-  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
+  )
+
+stopifnot(
+  nrow(district_schools) > 0,
+  !anyNA(district_schools$school_number),
+  anyDuplicated(district_schools$school_number) == 0L
+)
+
+school_data <- district_schools |>
+  filter(between(service_pct, 0, 100))
+
+n_excluded <- nrow(district_schools) - nrow(school_data)
+
+district_points <- district_schools |>
+  filter(located) |>
+  sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
 
 reporting_points <- district_points |>
   filter(between(service_pct, 0, 100))
@@ -111,7 +140,7 @@ places <- tibble(
 )
 ```
 
-```{r service-density-map, fig.height=6.7}
+```{r service-density-map}
 cell_size <- 100000
 projected <- st_transform(reporting_points, albers)
 xy <- st_coordinates(projected)
@@ -139,7 +168,7 @@ receipt_map <-ontario_map(c(-96, -73.9), c(41.4, 55.6)) +
   geom_sf(
   data = service_cells,
   aes(size = schools),
-  shape = 21, fill = "#84B4A8",
+  shape = 21, fill = "#A84615",
   colour = "#485B60", stroke = 0.3
 ) +
   geom_text(
@@ -249,11 +278,10 @@ sites_panel <- sites_map +
     subtitle = "Southern Ontario detail",
     caption = paste(
       sprintf(
-        "%d school records report 100%% receipt at %d sites.",
+        "%d school records report 100%% receipt at %d locations",
         nrow(all_receiving), nrow(full_sites)
       ),
-      "Squares mark Deaf, Blind, Deaf/Blind or Demonstration",
-      "designations in the file. Faint points show district schools.",
+      "Faint points show all district schools.",
       sep = "\n"
     )
   ) +
@@ -278,8 +306,80 @@ patchwork::wrap_plots(
 
 On the left, circle area shows how many of the 4,626 reporting district schools fall within each 100 km cell. The largest circles are around Toronto and other southern urban centres. Smaller circles across northern Ontario show that the reporting network extends well beyond those centres.
 
-On the right, orange dots mark 24 locations represented by 25 school records reporting that every student receives special education services. Many are in the Greater Toronto Area, and two are in Sudbury. The squares mark sites coded Deaf, Blind, Deaf/Blind, or Demonstration in Belleville, Brantford, London, and Milton. For boards serving communities far from those sites, a practical follow-up is to examine what specialist support students can access locally and when they need to travel.
+On the right, orange dots mark 24 locations represented by 25 school records reporting that every student receives special education services. Many are in the Greater Toronto Area, and two are in Sudbury. The squares mark sites non-standard campuses for deaf, blind, deaf/blind students in Belleville, Brantford, London, and Milton. For boards serving communities far from those sites, a practical follow-up is to examine what specialist support students can access locally and when they need to travel.
 
 Where schools report serving different shares of students, do their academic outcomes also differ? The next visualization compares secondary schools’ reported service percentages with the share of their Grade 9 students meeting the provincial standard in mathematics. This comparison can help boards identify where to look more closely at classroom supports.
+
+:::
+
+## 2
+
+text 
+
+```{r school-counts, fig.alt="Schools reporting 0% have their own bar. Together, the first three bars account for about four in five schools."}
+bin_labels <- c(
+  "0",
+  paste0(">", seq(0, 90, by = 10), "-", seq(10, 100, by = 10))
+)
+
+# school_data contains rates from 0 to 100, so the first interval contains only zeros.
+school_counts <- school_data |>
+  mutate(
+    percentage_group = cut(
+      service_pct,
+      breaks = c(-Inf, seq(0, 100, by = 10)),
+      labels = bin_labels,
+      right = TRUE
+    )
+  ) |>
+  count(percentage_group, name = "n_schools", .drop = FALSE) |>
+  mutate(at_or_below_20 = percentage_group %in% bin_labels[1:3])
+
+share_at_or_below_20 <- mean(school_data$service_pct <= 20)
+
+ggplot(school_counts, aes(x = percentage_group, y = n_schools)) +
+  geom_col(aes(fill = at_or_below_20), width = 0.74) +
+  geom_text(
+    aes(label = scales::comma(n_schools)),
+    vjust = -0.55, size = 3.4, colour = "black"
+  ) +
+  scale_fill_manual(
+    name = "Percentage of students receiving\nspecial education services",
+    values = c("TRUE" = "#286483", "FALSE" = "#9CAEBB"),
+    breaks = c("TRUE", "FALSE"),
+    labels = c("20% or fewer", "More than 20%"),
+    guide = guide_legend(ncol = 1)
+  ) +
+  scale_y_continuous(
+    labels = scales::label_comma(),
+    expand = expansion(mult = c(0, 0.13))
+  ) +
+  labs(
+    title = "Most schools report that 20% or fewer students receive services",
+    subtitle = "Public and Catholic district schools, 2024–25",
+    x = "Percentage of students receiving special education services (%)",
+    y = "Number of schools",
+    caption = paste0(
+      scales::comma(sum(school_data$service_pct > 20)),
+      " of ", scales::comma(nrow(school_data)), " schools (",
+      scales::percent(1 - share_at_or_below_20, accuracy = 0.1),
+      ") reported that more than 20% of their students receive special services."
+    )
+  ) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    legend.direction = "vertical",
+    legend.title.position = "top",
+    plot.caption = element_text(hjust = 0, face = "bold")
+  )
+```
+
+## 3
+
+text
+
+## 4
+
+text
 
 ## Conclusion
