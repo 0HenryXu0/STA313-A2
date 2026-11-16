@@ -1,5 +1,6 @@
 ---
-title: "Title"
+title: "Special education service provided in Ontario district schools"
+subtitle: "TEXT:SOME DETAILS"
 output: 
   pagedown::html_paged:
     toc: false
@@ -13,24 +14,272 @@ output:
 # - assume tidyverse (which includes ggplot2, dplyr, etc.) is already installed
 # - also assume pagedown or other rmarkdown theme libraries are installed
 # Ex) installing ggtext; provide the repo to avoid interruption
-install.packages("ggtext", repos = "https://packagemanager.posit.co/cran/latest")
-library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(sf)
+
+# install.packages("patchwork")
+# install.packages("canadianmaps")
+# install.packages("pagedown")
+
+data_file = "ont-school-demo-info.csv"
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 ```
 
 
-## Read from the same directory
+## Planning special education support across Ontario
 
-_Below code reads the `ont-sa-characteristic-ow-ont.csv` file uploaded in the
-same directory as the R Markdown file. You must also submit the data file with
-the submission._
+Where in Ontario do schools serve students with disabilities and other special education needs? How does academic achievement vary across schools with different shares of students receiving support? For school-board staff planning future services, these questions can help identify where to review access to specialist staff, accessible learning materials, and designated programs.
 
-```{r data_local}
-df <- read_csv("ont-sa-characteristic-ow-ont.csv")
-df |>
-  mutate(yearmonth = as.Date(paste0(year, "-", month, "-01"))) |>
-  ggplot(aes(x = yearmonth, y = cases)) +
-  geom_point() +
-  theme_minimal() +
-  scale_y_continuous(limits = c(150000, 300000))
+Ontario’s 2024–25 school records provide a starting point. They describe the share of students receiving special education services, identify some sites through special-condition codes, and report achievement at the school level. Decisions about additional support would also draw on students’ individual needs and the services already available to them.
+
+## Reporting schools' distribution in Ontario, with designated sites in four communities
+
+Where do district schools report special education service data, and where does the dataset identify designated sites or schools reporting that every student receives services? Figure 1 brings those locations together.
+
+```{r map-data, include=FALSE}
+
+data_file <- "ont-school-demo-info.csv"
+
+recent <- read_csv(
+  data_file,
+  na = c("", "NA", "SP"),
+  col_types = cols_only(
+    year = col_character(),
+    city = col_character(),
+    board_type = col_character(),
+    school_level = col_character(),
+    school_special_condition_code = col_character(),
+    longitude = col_double(),
+    latitude = col_double(),
+    percentage_of_students_receiving_special_education_services = col_double()
+  )
+) |>
+  filter(year == "2024-2025") |>
+  transmute(
+    city, board_type, longitude, latitude,
+    level = factor(school_level, levels = c("Elementary", "Secondary")),
+    condition = school_special_condition_code,
+    service_pct = percentage_of_students_receiving_special_education_services,
+    located = between(latitude, 41, 57) & between(longitude, -97, -73)
+  )
+
+district_points <- recent |>
+  filter(
+    located,
+    board_type %in% c("Pub Dist Sch Brd (E/F)", "Cath Dist Sch Brd (E/F)"),
+    condition == "Not applicable",
+    !is.na(level)
+  ) |>
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, remove = FALSE)
+
+reporting_points <- district_points |>
+  filter(between(service_pct, 0, 100))
 ```
+
+```{r geographic-context, include=FALSE}
+ontario <- ontario <- canadianmaps::PROV |>
+  dplyr::filter(PRENAME == "Ontario")
+
+albers <- st_crs(paste(
+  "+proj=aea +lat_1=44 +lat_2=55 +lat_0=50",
+  "+lon_0=-85 +datum=NAD83 +units=m +no_defs"
+))
+
+ontario_map <- function(lon, lat) {
+  ggplot() +
+    geom_sf(data = ontario, fill = "#F2F4F1",
+        colour = "#ACBABE", linewidth = 0.3) +
+    coord_sf(
+      crs = albers, default_crs = st_crs(4326),
+      xlim = lon, ylim = lat, lims_method = "box", expand = FALSE
+    ) +
+    theme_void(base_size = 12) +
+    theme(
+      plot.title.position = "plot",
+      plot.title = element_text(face = "bold"),
+      legend.position = "bottom"
+    )
+}
+
+places <- tibble(
+  city = c("Kenora", "Thunder Bay", "Sudbury", "Toronto", "Ottawa"),
+  longitude = c(-94.46, -89.25, -80.99, -79.40, -75.68),
+  latitude = c(49.78, 48.44, 46.50, 43.69, 45.38)
+)
+```
+
+```{r service-density-map, fig.height=6.7}
+cell_size <- 100000
+projected <- st_transform(reporting_points, albers)
+xy <- st_coordinates(projected)
+
+service_cells <- projected |>
+  st_drop_geometry() |>
+  mutate(
+    column = floor(xy[, "X"] / cell_size),
+    row = floor(xy[, "Y"] / cell_size),
+    above_20 = service_pct > 20
+  ) |>
+  group_by(level) |>
+  mutate(expected = mean(above_20)) |>
+  ungroup() |>
+  group_by(column, row) |>
+  summarise(schools = n(), gap_pp = 100 * mean(above_20 - expected), .groups = "drop") |>
+  mutate(
+    gap_pp = if_else(schools >= 10, gap_pp, NA_real_),
+    x = (column + 0.5) * cell_size,
+    y = (row + 0.5) * cell_size
+  ) |>
+  st_as_sf(coords = c("x", "y"), crs = albers)
+
+receipt_map <-ontario_map(c(-96, -73.9), c(41.4, 55.6)) +
+  geom_sf(
+  data = service_cells,
+  aes(size = schools),
+  shape = 21, fill = "#84B4A8",
+  colour = "#485B60", stroke = 0.3
+) +
+  geom_text(
+    data = places, aes(longitude, latitude, label = city),
+    nudge_y = 0.32, size = 3, check_overlap = TRUE
+  ) +
+  scale_size_area(
+    name = "Reporting schools", max_size = 11,
+    breaks = c(10, 50, 200, 500, 1000)
+  ) +
+  labs(title = "Reporting district schools", subtitle = "Counts by 100 km cell")
+```
+
+```{r designated-and-100-percent-schools}
+all_receiving <- recent |> filter(located, service_pct == 100)
+
+full_sites <- all_receiving |>
+  distinct(longitude, latitude) |>
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+designated <- recent |>
+  filter(located, condition %in% c("Deaf", "Blind", "Deaf/Blind", "Demonstration")) |>
+  distinct(city, longitude, latitude)
+
+designated_sites <- st_as_sf(designated, coords = c("longitude", "latitude"), crs = 4326)
+
+campus_names <- c(
+  Belleville = "Sir James Whitney", Brantford = "W. Ross Macdonald",
+  London = "Robarts", Milton = "Ernest C. Drury"
+)
+
+site_labels <- designated |>
+  group_by(city) |>
+  summarise(longitude = mean(longitude), latitude = mean(latitude), .groups = "drop") |>
+  mutate(
+    campus = campus_names[city],
+    label_latitude = latitude + if_else(city == "Brantford", -0.21, 0.20)
+  )
+
+sites_map <- ontario_map(c(-83.1, -74.25), c(42.55, 46.9)) +
+  geom_sf(
+  data = district_points,
+  aes(shape = "District schools"),
+  colour = "#C6D1D3", size = 0.45, alpha = 0.8
+  ) +
+  geom_sf(
+    data = full_sites, aes(shape = "Schools with 100% reported students receiving special services"),
+    colour = "#A84615", size = 2.6
+  ) +
+  geom_sf(
+    data = designated_sites, aes(shape = "Non-standard campuses for deaf, blind, deaf/blind students"),
+    colour = "#26344B", size = 4.4, stroke = 1.1
+  ) +
+  geom_text(
+    data = site_labels, aes(longitude, label_latitude, label = campus),
+    size = 3.3, check_overlap = TRUE
+  ) +
+  scale_shape_manual(
+    values = c(
+      "District schools" = 16,
+      "Schools with 100% reported students receiving special services" = 16,
+      "Non-standard campuses for deaf, blind, deaf/blind students" = 0
+    ),
+    name = NULL,
+    breaks = c(
+    "District schools",
+    "Non-standard campuses for deaf, blind, deaf/blind students",
+    "Schools with 100% reported students receiving special services"
+    ),
+    guide = guide_legend(
+      ncol = 1,
+      override.aes = list(size = c(2.6, 4.4, 2.6))
+    )
+  ) +
+  labs(
+    title = "Where are the 100% service-reporting schools and designated sites?",
+    subtitle = paste0(
+      "The 2024-25 CSV has ", nrow(all_receiving), " records with 100% reported receipt at ",
+      nrow(full_sites), " mapped sites.\n",
+      "Squares mark designated sites, including those with unreported rates. Faint points show district schools."
+    )
+  )
+sites_map <- sites_map +
+  coord_sf(
+    crs = albers,
+    default_crs = st_crs(4326),
+    xlim = c(-83.1, -74.25),
+    ylim = c(42.55, 46.9),
+    lims_method = "box",
+    expand = FALSE
+  )
+```
+
+```{r special-education-maps, echo=FALSE, fig.width=10, fig.height=8, out.width="100%", fig.align="center", dpi=180}
+map_panel_theme <- theme(
+  legend.box = "vertical",
+  plot.margin = margin(5, 12, 5, 12),
+  plot.caption.position = "plot",
+  plot.caption = element_text(hjust = 0, size = 10, lineheight = 1.15)
+)
+
+receipt_panel <- receipt_map + map_panel_theme
+
+sites_panel <- sites_map +
+  labs(
+    title = "100% receipt and designated sites",
+    subtitle = "Southern Ontario detail",
+    caption = paste(
+      sprintf(
+        "%d school records report 100%% receipt at %d sites.",
+        nrow(all_receiving), nrow(full_sites)
+      ),
+      "Squares mark Deaf, Blind, Deaf/Blind or Demonstration",
+      "designations in the file. Faint points show district schools.",
+      sep = "\n"
+    )
+  ) +
+  map_panel_theme
+
+patchwork::wrap_plots(
+  receipt_panel, sites_panel,
+  ncol = 2, widths = c(1, 1.12), guides = "keep"
+) +
+  patchwork::plot_annotation(
+    title = "Special education reporting and designated sites",
+    subtitle = paste(
+      "In 2024–25, all mapped sites with 100% reported receipt",
+      "or a designated program were in southern Ontario."
+    ),
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 18),
+      plot.subtitle = element_text(size = 11)
+    )
+  )
+```
+
+On the left, circle area shows how many of the 4,626 reporting district schools fall within each 100 km cell. The largest circles are around Toronto and other southern urban centres. Smaller circles across northern Ontario show that the reporting network extends well beyond those centres.
+
+On the right, orange dots mark 24 locations represented by 25 school records reporting that every student receives special education services. Many are in the Greater Toronto Area, and two are in Sudbury. The squares mark sites coded Deaf, Blind, Deaf/Blind, or Demonstration in Belleville, Brantford, London, and Milton. For boards serving communities far from those sites, a practical follow-up is to examine what specialist support students can access locally and when they need to travel.
+
+Where schools report serving different shares of students, do their academic outcomes also differ? The next visualization compares secondary schools’ reported service percentages with the share of their Grade 9 students meeting the provincial standard in mathematics. This comparison can help boards identify where to look more closely at classroom supports.
+
+## Conclusion
