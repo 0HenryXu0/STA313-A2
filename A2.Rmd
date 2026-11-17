@@ -69,7 +69,8 @@ schools <- read_csv(
     city = col_character(),
     longitude = col_double(),
     latitude = col_double(),
-    percentage_of_students_receiving_special_education_services = col_double()
+    percentage_of_students_receiving_special_education_services = col_double(),
+    percentage_of_grade_9_students_achieving_the_provincial_standard_in_mathematics = col_double()
   )
 ) |>
   mutate(service_pct = percentage_of_students_receiving_special_education_services)
@@ -168,8 +169,8 @@ receipt_map <-ontario_map(c(-96, -73.9), c(41.4, 55.6)) +
   geom_sf(
   data = service_cells,
   aes(size = schools),
-  shape = 21, fill = "#A84615",
-  colour = "#485B60", stroke = 0.3
+  shape = 21, fill = "orange",
+  colour = "#C6D1D3", stroke = 0.3
 ) +
   geom_text(
     data = places, aes(longitude, latitude, label = city),
@@ -179,7 +180,7 @@ receipt_map <-ontario_map(c(-96, -73.9), c(41.4, 55.6)) +
     name = "Reporting schools", max_size = 11,
     breaks = c(10, 50, 200, 500, 1000)
   ) +
-  labs(title = "Reporting district schools", subtitle = "Counts by 100 km cell")
+  labs(title = "All Reporting district schools", subtitle = "Counts by 100 km cells")
 ```
 
 ```{r designated-and-100-percent-schools}
@@ -242,14 +243,6 @@ sites_map <- ontario_map(c(-83.1, -74.25), c(42.55, 46.9)) +
       ncol = 1,
       override.aes = list(size = c(2.6, 4.4, 2.6))
     )
-  ) +
-  labs(
-    title = "Where are the 100% service-reporting schools and designated sites?",
-    subtitle = paste0(
-      "The 2024-25 CSV has ", nrow(all_receiving), " records with 100% reported receipt at ",
-      nrow(full_sites), " mapped sites.\n",
-      "Squares mark designated sites, including those with unreported rates. Faint points show district schools."
-    )
   )
 sites_map <- sites_map +
   coord_sf(
@@ -274,14 +267,13 @@ receipt_panel <- receipt_map + map_panel_theme
 
 sites_panel <- sites_map +
   labs(
-    title = "100% receipt and designated sites",
-    subtitle = "Southern Ontario detail",
+    title = "Schools with 100% special service rate\nand designated sites",
+    subtitle = "Details in Southern Ontario",
     caption = paste(
       sprintf(
-        "%d school records report 100%% receipt at %d locations",
+        "%d school records report 100%% students receiving special education services\nat %d locations",
         nrow(all_receiving), nrow(full_sites)
       ),
-      "Faint points show all district schools.",
       sep = "\n"
     )
   ) +
@@ -292,9 +284,9 @@ patchwork::wrap_plots(
   ncol = 2, widths = c(1, 1.12), guides = "keep"
 ) +
   patchwork::plot_annotation(
-    title = "Special education reporting and designated sites",
+    title = "Special education service reportings and designated sites",
     subtitle = paste(
-      "In 2024–25, all mapped sites with 100% reported receipt",
+      "In 2024–25, all mapped schools with 100% students receiving special education services",
       "or a designated program were in southern Ontario."
     ),
     theme = theme(
@@ -308,47 +300,52 @@ On the left, circle area shows how many of the 4,626 reporting district schools 
 
 On the right, orange dots mark 24 locations represented by 25 school records reporting that every student receives special education services. Many are in the Greater Toronto Area, and two are in Sudbury. The squares mark sites non-standard campuses for deaf, blind, deaf/blind students in Belleville, Brantford, London, and Milton. For boards serving communities far from those sites, a practical follow-up is to examine what specialist support students can access locally and when they need to travel.
 
-Where schools report serving different shares of students, do their academic outcomes also differ? The next visualization compares secondary schools’ reported service percentages with the share of their Grade 9 students meeting the provincial standard in mathematics. This comparison can help boards identify where to look more closely at classroom supports.
-
 :::
 
-## 2
+## Schools providing various levels of special education services
 
-text 
+From Figure 1, we explored the geographical locations of all district schools, however only a small amount of them are fully serving the students with special needs. The majority of students needing special services are spread across Ontario schools, and the following figure will show the count of schools providing services for different proportion of their students.
 
-```{r school-counts, fig.alt="Schools reporting 0% have their own bar. Together, the first three bars account for about four in five schools."}
+```{r school-count}
 bin_labels <- c(
   "0",
-  paste0(">", seq(0, 90, by = 10), "-", seq(10, 100, by = 10))
+  paste0(">", seq(0, 80, by = 10), "-", seq(10, 90, by = 10)),
+  ">90-<100",
+  "100"
 )
+bin_midpoints <- setNames(c(0, seq(5, 95, by = 10), 100), bin_labels)
 
-# school_data contains rates from 0 to 100, so the first interval contains only zeros.
 school_counts <- school_data |>
   mutate(
     percentage_group = cut(
       service_pct,
       breaks = c(-Inf, seq(0, 100, by = 10)),
-      labels = bin_labels,
+      labels = head(bin_labels, -1),
       right = TRUE
+    ),
+    percentage_group = factor(
+      if_else(service_pct == 100, "100", as.character(percentage_group)),
+      levels = bin_labels
     )
   ) |>
   count(percentage_group, name = "n_schools", .drop = FALSE) |>
-  mutate(at_or_below_20 = percentage_group %in% bin_labels[1:3])
+  mutate(midpoint_pct = unname(bin_midpoints[as.character(percentage_group)]))
 
 share_at_or_below_20 <- mean(school_data$service_pct <= 20)
 
-ggplot(school_counts, aes(x = percentage_group, y = n_schools)) +
-  geom_col(aes(fill = at_or_below_20), width = 0.74) +
+ggplot(school_counts, aes(percentage_group, n_schools)) +
+  geom_col(aes(fill = midpoint_pct), width = 0.74) +
   geom_text(
     aes(label = scales::comma(n_schools)),
     vjust = -0.55, size = 3.4, colour = "black"
   ) +
-  scale_fill_manual(
-    name = "Percentage of students receiving\nspecial education services",
-    values = c("TRUE" = "#286483", "FALSE" = "#9CAEBB"),
-    breaks = c("TRUE", "FALSE"),
-    labels = c("20% or fewer", "More than 20%"),
-    guide = guide_legend(ncol = 1)
+  scale_fill_gradient(
+    name = "Percentage receiving\nservices",
+    low = "#F1D3BC",
+    high = "#A84615",
+    limits = c(0, 100),
+    breaks = seq(0, 100, by = 25),
+    labels = scales::label_number(suffix = "%")
   ) +
   scale_y_continuous(
     labels = scales::label_comma(),
@@ -363,23 +360,149 @@ ggplot(school_counts, aes(x = percentage_group, y = n_schools)) +
       scales::comma(sum(school_data$service_pct > 20)),
       " of ", scales::comma(nrow(school_data)), " schools (",
       scales::percent(1 - share_at_or_below_20, accuracy = 0.1),
-      ") reported that more than 20% of their students receive special services."
+      ") reported that more than 20% of their students receive special services. 
+      \nExact color of each bin is based on their midpoints."
     )
   ) +
   theme(
     panel.grid.major.x = element_blank(),
     legend.direction = "vertical",
     legend.title.position = "top",
-    plot.caption = element_text(hjust = 0, face = "bold")
+    plot.caption = element_text(hjust = 0, vjust = 0)
   )
 ```
+In 2024–25, 4,550 schools reported that at least some students received special education services, while our data covered 4,626 elementary and secondary schools in public and Catholic district boards. From the 25 records mapped in Figure 1, 12 of them appear in Figure 2’s 100% bar. The other 13 records came from consortium, hospital, or demonstration schools outside of the two boards.
+
+The two tallest bars cover schools reporting rates above 0% through 20%. Including the 76 schools reporting zero, 3,755 schools (81.2%) were at or below 20%. Even among schools above that cutoff, nearly three quarters were in the next range, above 20% through 30%.
+
+For school boards, this distribution shows why planning for special education support extends across the district school network. Most reporting schools serve students receiving special education services as part of a larger student population.
 
 ## 3
 
 text
 
+```{r grade9-math}
+grade9_data <- school_data |>
+  rename(math_pct = percentage_of_grade_9_students_achieving_the_provincial_standard_in_mathematics) |>
+  filter(level == "Secondary", between(math_pct, 0, 100))
+
+grade9_summary <- grade9_data |>
+  mutate(
+    service_band = cut(
+      service_pct,
+      breaks = c(0, 10, 20, 30, 40, 100),
+      labels = c("0–10%", ">10–20%", ">20–30%", ">30–40%", ">40%"),
+      include.lowest = TRUE
+    )
+  ) |>
+  group_by(service_band) |>
+  summarise(
+    n_schools = n(),
+    median_math = median(math_pct),
+    .groups = "drop"
+  )
+
+grade9_axis_labels <- setNames(
+  paste0(grade9_summary$service_band, "\n", grade9_summary$n_schools, " schools"),
+  grade9_summary$service_band
+)
+
+ggplot(grade9_summary, aes(service_band, median_math)) +
+  geom_col(fill = "#547082", width = 0.68) +
+  geom_text(aes(label = paste0(median_math, "%")), vjust = -0.5, size = 3.6) +
+  scale_x_discrete(labels = grade9_axis_labels) +
+  scale_y_continuous(
+    breaks = seq(0, 100, by = 20),
+    labels = scales::label_percent(scale = 1),
+    limits = c(0, 100),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(
+    title = "Median Grade 9 math results are lower in groups\nwith higher service receipt",
+    subtitle = "Ontario secondary district schools, 2024–25",
+    x = "Share of students receiving special education services",
+    y = "Grade 9 students meeting\nthe provincial math standard",
+    caption = "Each bar shows the median of the school-wide Grade 9 results in its group."
+  ) +
+  theme(panel.grid.major.x = element_blank())
+```
+
 ## 4
 
 text
+```{r service-by-year}
+service_bands <- c(
+  "0%", "Over 0% to 10%", "Over 10% to 20%",
+  "Over 20% to under 100%", "100%"
+)
+
+service_by_year <- schools |>
+  filter(
+    board_type %in% c("Pub Dist Sch Brd (E/F)", "Cath Dist Sch Brd (E/F)"),
+    school_special_condition_code == "Not applicable",
+    school_level %in% c("Elementary", "Secondary")
+  ) |>
+  mutate(service_pct = if_else(
+    year == "2023-2024", round(service_pct * 100, 8), service_pct
+  )) |>
+  filter(between(service_pct, 0, 100)) |>
+  mutate(
+    band = factor(case_when(
+      service_pct == 0  ~ service_bands[1],
+      service_pct <= 10 ~ service_bands[2],
+      service_pct <= 20 ~ service_bands[3],
+      service_pct < 100 ~ service_bands[4],
+      TRUE              ~ service_bands[5]
+    ), levels = service_bands)
+  ) |>
+  count(year, band, name = "n_schools", .drop = FALSE) |>
+  group_by(year) |>
+  mutate(share = n_schools / sum(n_schools)) |>
+  ungroup()
+
+year_counts <- service_by_year |>
+  group_by(year) |>
+  summarise(n_reporting = sum(n_schools), .groups = "drop")
+
+year_labels <- setNames(
+  paste0(
+    sub("-20", "–", year_counts$year, fixed = TRUE),
+    "\nn = ", scales::comma(year_counts$n_reporting)
+  ),
+  year_counts$year
+)
+
+ggplot(service_by_year, aes(year, share, fill = band)) +
+  geom_col(width = 0.8, position = position_dodge2(padding = 0.08)) +
+  scale_fill_manual(
+    name = "Share of students receiving special education services",
+    values = setNames(
+      c("#F2DFD1", "#F0C7AB", "#DF9C73", "#BD734C", "#A84615"),
+      service_bands
+    )
+  ) +
+  scale_x_discrete(labels = function(x) unname(year_labels[x])) +
+  scale_y_continuous(
+    labels = scales::label_percent(),
+    breaks = seq(0, 1, by = 0.1),
+    expand = expansion(mult = c(0, 0.12))
+  ) +
+  labs(
+    title = "Special education service rates by school year",
+    subtitle = "Ontario public and Catholic district schools with a reported rate",
+    x = NULL, y = "Share of reporting schools",
+    caption = "Each school counts once per year. The 100% group contains 7–12 schools per year."
+  ) +
+  guides(fill = guide_legend(nrow = 1)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "top",
+    legend.title.position = "top",
+    legend.justification = "left",
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.caption = element_text(hjust = 0)
+  )
+```
 
 ## Conclusion
